@@ -1,10 +1,10 @@
 ## Interface: 43000
-## Title: NADTTrustList
+## Title: NADTQuestShare
 ## Author: Karatheya <addons@nadt.net>
 ## Version: 1.0.0
 ## Notes: Share Quests to those on your Trust List
 ## SavedVariablesPerCharacter: NQS_DB
-## Dependencies: NADTTrustList
+## RequiredDeps: NADTTrustList
 ## OptionalDeps: Ace3
 
 embeds.xml
