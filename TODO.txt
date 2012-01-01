@@ -1,3 +1,0 @@
-TODO
-
-using the qid numerically as an index in myquests and myoldquests is creating problems

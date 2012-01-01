@@ -10,24 +10,32 @@ NQS = LibStub("AceAddon-3.0"):NewAddon(
 )
 
 local playerName = UnitName("player")
-local myquests = {}
-local myoldquests = nil
-local slavequests = {}
+local quests = {}
+local oldquests = {}
+local firstscan = true
+
+-- meta table of qlinks to qids
+NQS.qids = setmetatable({}, {
+	__index = function(t,i)
+		local v = tonumber(i:match("|Hquest:(%d+):"))
+		t[i] = v
+		return v
+	end,
+})
 
 function NQS:OnEnable()
 
 	-- common
+	self:QUEST_LOG_UPDATE()
 	self:RegisterEvent("QUEST_LOG_UPDATE")
 
 	-- master
 	if NQS_DB.mode == "master" then
-		self:RegisterEvent("QUEST_ACCEPTED", "QUEST_ACCEPTED_MASTER")
 		self:Print("NADTQuestShare initialized - master")
 	end
 	
 	-- slave
 	if NQS_DB.mode == "slave" then
-		self:RegisterEvent("QUEST_ACCEPTED", "QUEST_ACCEPTED_SLAVE")
 		self:RegisterEvent("QUEST_ACCEPT_CONFIRM")
 		self:Print("NADTQuestShare initialized - slave")
 	end
@@ -48,30 +56,22 @@ function NQS:OnCommReceived(prefix, message, distribution, sender)
 
 	if prefix ~= "nqs" or distribution ~= "PARTY" or sender == playerName or not NTL:IsUnitTrusted(sender) then return end
 	
-	local verb, rest = message:match( "^(%S+) (.+)$" )
+	local verb, qlink = message:match( "^(%S+) (.+)$" )
 	
 	if verb == "ACCEPTED" then
-		local qlink = rest
-		local qid = self:GetQuestIdForLink(qlink)
 		self:Print(sender, "accepted", qlink)
-		if NQS_DB.mode == "master" then
-			slavequests[qid] = 1
-		end
 	elseif verb == "TURNEDIN" then
-		local qlink = rest
-		local qid = self:GetQuestIdForLink(qlink)
 		self:Print(sender, "turned in", qlink)
-		if NQS_DB.mode == "master" then
-			slavequests[qid] = nil
-		end
 	elseif verb == "DOYOUHAVE" then
-		local qid = tonumber(rest)
-		if not myquests.qid then
-			SendAddonMessage( "nqs", "DONOTHAVE " .. qid, "PARTY" )
+		if NQS_DB.mode == "slave" then
+			if not quests[self.qids[qlink]] then
+				SendAddonMessage( "nqs", "DONOTHAVE " .. qlink, "PARTY" )
+			end
 		end
 	elseif verb == "DONOTHAVE" then
-		local qid = tonumber(rest)
-		self:ShareQuestById(qid)
+		if NQS_DB.mode == "master" then
+			self:ShareQuestById(self.qids[qlink])
+		end
 	end
 end
 
@@ -83,110 +83,78 @@ function NQS:QUEST_ACCEPT_CONFIRM(name, qname)
 	StaticPopup_Hide("QUEST_ACCEPT")
 end
 
--- we have accepted a quest (slave)
-function NQS:QUEST_ACCEPTED_MASTER(event, index)
-	local qlink = GetQuestLink( index )
-	local qid = self:GetQuestIdForLink( qlink )
-	SendAddonMessage( "nqs", "ACCEPTED " .. qlink, "PARTY" )
-	SendAddonMessage( "nqs", "DOYOUHAVE " .. qid, "PARTY" )
-end
-
--- we have accepted a quest (slave)
-function NQS:QUEST_ACCEPTED_SLAVE(event, index)
-	SendAddonMessage( "nqs", "ACCEPTED " .. GetQuestLink(index), "PARTY" )
-end
-
 -- our quest log has changed
 function NQS:QUEST_LOG_UPDATE(event)
 	
-	self:Print("quest log updated")
+	quests, oldquests = oldquests, quests
+	wipe(quests)
 	
-	if( nil == myoldquests ) then
-		self:Print("doing first time quest log scanning")
-		myoldquests = {}
-		self:PopulateMyQuests()
+	-- build up a map of the quest in our log, qid => qlink
+	for i = 1, GetNumQuestLogEntries() do
+		local qlink = GetQuestLink(i)
+		if qlink then quests[self.qids[qlink]] = qlink end
+	end
+
+	-- break out early if there are no old quests to compare to
+	if firstscan then
+		firstscan = nil
 		return
-	else
-		-- keep a copy of the quest log as it existed before the update
-		self:Print("size of myquests is", #myquests)
-		self:Print("size of myoldquests is", #myquests)
-		myoldquests = myquests
-		self:PopulateMyQuests()
-		self:Print("after swap, size of myquests is", #myquests)
-		self:Print("after swap size of myoldquests is", #myquests)
 	end
 	
 	-- iterate over old quests, reporting as turned in any that aren't in current
-	for qid, qlink in pairs(myoldquests) do
-		self:Print("checking if qid", qid, "is in current")
-		if not myquests.qid then
-			self:Print("qid", qid, "IS NOT in current")
-			SendAddonMessage( "nqs", "TURNEDIN " .. link, "PARTY" )
-		else
-			self:Print("qid", qid, "IS in current")
+	for qid, qlink in pairs(oldquests) do
+		if not quests[qid] then
+			if not abandoning then
+				SendAddonMessage( "nqs", "TURNEDIN " .. qlink, "PARTY" )
+			end
 		end
 	end
-	
-	-- slave can exit out here
-	if NQS_DB.mode == "slave" then return end
+	abandoning = nil
 	
 	-- iterate over current quests, checking for ones that aren't in the old list
-	for qid, qlink in pairs(myquests) do
-		if not myoldquests[qid] then
-			SendAddonMessage( "nqs", "DOYOUHAVE " .. qid, "PARTY" )
-		end
-	end
-	
-end
-
-function NQS:PopulateMyQuests()
-	self:Print("before populate, size of myquests is", #myquests)
-	-- build up a map of the quest in our log, qid => qlink
-	wipe(myquests)
-	for i = 1, GetNumQuestLogEntries() do
-		local link = GetQuestLink(i)
-		if link then
-			local qid = self:GetQuestIdForLink(link)
-			myquests.qid = link
-		end
-	end
-	self:Print("after populate, size of myquests is", #myquests)
-end
-
--- get the quest id for a quest link
-function NQS:GetQuestIdForLink(qlink)
-	local qid = qlink:match("|Hquest:(%d+):")
-	return tonumber(qid)
-end
-
--- get the quest id for a quest index
-function NQS:GetQuestIdForIndex(index)
-	return select(9, GetQuestLogTitle(index))
-end
-
--- share a quest by id
-function NQS:ShareQuestById(qid)
-
-	-- only share in trusted parties
-	if NTL:IsGroupTrusted() then
-	
-		-- find the quest
-		local title, thisqid
-		for i = 1, GetNumQuestLogEntries() do
-			local thisqid = select(9, GetQuestLogTitle(i))
-			if qid == thisqid then
-				local qlink = GetQuestLink(i)
-				SelectQuestLogEntry( i )
-				if GetQuestLogPushable() then
-					QuestLogPushQuest()
-				else
-					self:Print(qlink, "is not shareable")
-				end
+	for qid, qlink in pairs(quests) do
+		if not oldquests[qid] then
+			SendAddonMessage( "nqs", "ACCEPTED " .. qlink, "PARTY" )
+			if NQS_DB.mode == "master" then
+				SendAddonMessage( "nqs", "DOYOUHAVE " .. qlink, "PARTY" )
 			end
 		end
 	end
 	
 end
+
+-- share a quest by id
+function NQS:ShareQuestById(qid)
+
+	-- find the quest
+	local title, thisqid
+	for i = 1, GetNumQuestLogEntries() do
+		local thisqid = select(9, GetQuestLogTitle(i))
+		if qid == thisqid then
+			local qlink = GetQuestLink(i)
+			SelectQuestLogEntry( i )
+			if GetQuestLogPushable() then
+				-- only share in trusted parties
+				if NTL:IsGroupTrusted() then
+					QuestLogPushQuest()
+				else
+					self:Print("not in a trusted party - not sharing ", qlink)
+				end
+			else
+				self:Print(qlink, "is not shareable")
+			end
+		end
+	end
+	
+end
+
+-- this lets us distinguish between turning in and abandoning a quest
+local orig = AbandonQuest
+function AbandonQuest(...)
+	abandoning = true
+	return orig(...)
+end
+
 
 --
 -- EOF
