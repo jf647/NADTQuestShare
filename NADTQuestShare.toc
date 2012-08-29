@@ -1,7 +1,7 @@
-## Interface: 43000
+## Interface: 50000
 ## Title: NADTQuestShare
 ## Author: Karatheya <addons@nadt.net>
-## Version: 1.0.0
+## Version: 1.1.0
 ## Notes: Share Quests to those on your Trust List
 ## SavedVariablesPerCharacter: NQS_DB
 ## RequiredDeps: NADTTrustList
